@@ -1,12 +1,39 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Upload, Eye, Plus, X, Save, Download } from 'lucide-react'
+import { Upload, Eye, Plus, X, Save, Download, Trash2 } from 'lucide-react'
 import styles from './page.module.css'
+
+// Helper function to compress images
+const compressImage = (file) => {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.readAsDataURL(file)
+    reader.onload = (event) => {
+      const img = new Image()
+      img.src = event.target.result
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        const MAX_WIDTH = 500 // Shrink image to 500px width
+        const scaleSize = MAX_WIDTH / img.width
+        canvas.width = MAX_WIDTH
+        canvas.height = img.height * scaleSize
+
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        
+        // Compress to JPEG at 70% quality
+        resolve(canvas.toDataURL('image/jpeg', 0.7))
+      }
+    }
+  })
+}
 
 export default function Home() {
   const [listings, setListings] = useState([])
   const [showPreview, setShowPreview] = useState(false)
+  const [isCompressing, setIsCompressing] = useState(false) // Loading state for images
+  
   const [formData, setFormData] = useState({
     artist: '',
     album: '',
@@ -16,21 +43,28 @@ export default function Home() {
     label: '',
     seller: '',
     price: '',
-    image: null,
-    imagePreview: null
+    images: [] // Changed from single 'image' to array 'images'
   })
 
   // Load listings from localStorage on component mount
   useEffect(() => {
     const saved = localStorage.getItem('musicweb_listings')
     if (saved) {
-      setListings(JSON.parse(saved))
+      try {
+        setListings(JSON.parse(saved))
+      } catch (e) {
+        console.error("Could not load listings", e)
+      }
     }
   }, [])
 
   // Save listings to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem('musicweb_listings', JSON.stringify(listings))
+    try {
+      localStorage.setItem('musicweb_listings', JSON.stringify(listings))
+    } catch (e) {
+      alert("Storage full! Please delete some old listings or use fewer photos.")
+    }
   }, [listings])
 
   const handleInputChange = (e) => {
@@ -41,19 +75,25 @@ export default function Home() {
     }))
   }
 
-  const handleImageUpload = (e) => {
-    const file = e.target.files[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        setFormData(prev => ({
-          ...prev,
-          image: file,
-          imagePreview: reader.result
-        }))
-      }
-      reader.readAsDataURL(file)
+  const handleImageUpload = async (e) => {
+    const files = Array.from(e.target.files)
+    if (files.length > 0) {
+      setIsCompressing(true)
+      const compressedImages = await Promise.all(files.map(file => compressImage(file)))
+      
+      setFormData(prev => ({
+        ...prev,
+        images: [...prev.images, ...compressedImages]
+      }))
+      setIsCompressing(false)
     }
+  }
+
+  const removeImage = (indexToRemove) => {
+    setFormData(prev => ({
+      ...prev,
+      images: prev.images.filter((_, index) => index !== indexToRemove)
+    }))
   }
 
   const handleAddListing = () => {
@@ -79,14 +119,15 @@ export default function Home() {
       label: '',
       seller: '',
       price: '',
-      image: null,
-      imagePreview: null
+      images: []
     })
     setShowPreview(false)
   }
 
   const handleDeleteListing = (id) => {
-    setListings(prev => prev.filter(listing => listing.id !== id))
+    if(confirm("Are you sure you want to delete this listing?")) {
+      setListings(prev => prev.filter(listing => listing.id !== id))
+    }
   }
 
   const handleDownloadJSON = () => {
@@ -233,25 +274,45 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Image Upload */}
+              {/* Image Upload (UPDATED) */}
               <div className={styles.field}>
-                <label>Album Cover Image</label>
+                <label>Album Photos (Select multiple)</label>
                 <label className={styles.uploadLabel}>
                   <Upload size={16} />
-                  <span>Click to upload cover art</span>
+                  <span>{isCompressing ? "Compressing..." : "Click to upload photos"}</span>
                   <input
                     type="file"
                     accept="image/*"
+                    multiple 
                     onChange={handleImageUpload}
                     style={{ display: 'none' }}
+                    disabled={isCompressing}
                   />
                 </label>
               </div>
 
-              {formData.imagePreview && (
-                <div className={styles.previewImage}>
-                  <p>Preview:</p>
-                  <img src={formData.imagePreview} alt="Preview" />
+              {/* Photo Preview Grid (UPDATED) */}
+              {formData.images.length > 0 && (
+                <div className={styles.previewGrid}>
+                   <p style={{width: '100%', marginBottom: '8px'}}>Photos ({formData.images.length}):</p>
+                   <div style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
+                      {formData.images.map((imgSrc, idx) => (
+                        <div key={idx} style={{position: 'relative', width: '80px', height: '80px'}}>
+                          <img src={imgSrc} alt="Preview" style={{width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px', border: '1px solid #ddd'}} />
+                          <button 
+                            onClick={() => removeImage(idx)}
+                            style={{
+                              position: 'absolute', top: -5, right: -5, 
+                              background: 'red', color: 'white', border: 'none', 
+                              borderRadius: '50%', width: '20px', height: '20px', 
+                              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                   </div>
                 </div>
               )}
 
@@ -266,6 +327,7 @@ export default function Home() {
                 </button>
                 <button
                   onClick={handleAddListing}
+                  disabled={isCompressing}
                   className={styles.buttonPrimary}
                 >
                   <Plus size={16} />
@@ -283,12 +345,13 @@ export default function Home() {
 
                 <div className={styles.listingCard}>
                   <div className={styles.cardImage}>
-                    {formData.imagePreview ? (
-                      <img src={formData.imagePreview} alt={formData.album} />
+                    {formData.images.length > 0 ? (
+                      <img src={formData.images[0]} alt={formData.album} />
                     ) : (
                       <div className={styles.placeholderImage}>🎵</div>
                     )}
                   </div>
+                  {formData.images.length > 1 && <p style={{fontSize: '12px', textAlign: 'center', color: '#666'}}>+ {formData.images.length - 1} more photos</p>}
 
                   <div className={styles.cardInfo}>
                     <h4>{formData.album || 'Album Title'}</h4>
@@ -342,7 +405,10 @@ export default function Home() {
                   </button>
 
                   <div className={styles.cardImage}>
-                    {listing.imagePreview ? (
+                    {listing.images && listing.images.length > 0 ? (
+                      <img src={listing.images[0]} alt={listing.album} />
+                    ) : listing.imagePreview ? (
+                      // Fallback for old listings
                       <img src={listing.imagePreview} alt={listing.album} />
                     ) : (
                       <div className={styles.placeholderImage}>🎵</div>
